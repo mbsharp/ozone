@@ -2344,6 +2344,14 @@
     </description>
   </property>
   <property>
+    <name>ozone.client.trash.recovery.interval</name>
+    <value>120</value>
+    <tag>OZONE, CLIENT</tag>
+    <description>
+      The maximum number of minutes to list or recover a deleted trash key.
+    </description>
+  </property>
+  <property>
     <name>ozone.http.basedir</name>
     <value></value>
     <tag>OZONE, OM, SCM, MANAGEMENT</tag>

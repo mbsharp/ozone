@@ -346,10 +346,8 @@ public interface ClientProtocol {
    * List trash allows the user to list the keys that were marked as deleted,
    * but not actually deleted by Ozone Manager. This allows a user to recover
    * keys within a configurable window.
-   * @param volumeName - The volume name, which can also be a wild card
-   *                   using '*'.
-   * @param bucketName - The bucket name, which can also be a wild card
-   *                   using '*'.
+   * @param volumeName - The volume name
+   * @param bucketName - The bucket name
    * @param startKeyName - List keys from a specific key name.
    * @param keyPrefix - List keys using a specific prefix.
    * @param maxKeys - The number of keys to be returned. This must be below

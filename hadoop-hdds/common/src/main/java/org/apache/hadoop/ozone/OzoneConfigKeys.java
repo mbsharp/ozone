@@ -395,6 +395,10 @@ public final class OzoneConfigKeys {
       "ozone.client.list.trash.keys.max";
   public static final int OZONE_CLIENT_LIST_TRASH_KEYS_MAX_DEFAULT = 1000;
 
+  public static final String OZONE_CLIENT_TRASH_RECOVERY_INTERVAL =
+      "ozone.client.trash.recovery.interval";
+  public static final int OZONE_CLIENT_TRASH_RECOVERY_INTERVAL_DEFAULT = 120;
+
   public static final String OZONE_HTTP_BASEDIR = "ozone.http.basedir";
 
   public static final String OZONE_HTTP_POLICY_KEY =

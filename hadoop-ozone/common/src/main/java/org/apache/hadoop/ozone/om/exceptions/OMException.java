@@ -123,6 +123,8 @@ public class OMException extends IOException {
 
     BUCKET_ALREADY_EXISTS,
 
+    BUCKET_NOT_TRASH_ENABLED,
+
     KEY_ALREADY_EXISTS,
 
     KEY_NOT_FOUND,

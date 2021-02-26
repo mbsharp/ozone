@@ -79,12 +79,16 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import org.apache.commons.lang3.StringUtils;
+
+import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_CLIENT_TRASH_RECOVERY_INTERVAL;
+import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_CLIENT_TRASH_RECOVERY_INTERVAL_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_OPEN_KEY_EXPIRE_THRESHOLD_SECONDS;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_OPEN_KEY_EXPIRE_THRESHOLD_SECONDS_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConsts.DB_TRANSIENT_MARKER;
 import static org.apache.hadoop.ozone.OzoneConsts.OM_DB_NAME;
 import static org.apache.hadoop.ozone.OzoneConsts.OM_KEY_PREFIX;
 
+import org.apache.hadoop.util.Time;
 import org.apache.ratis.util.ExitUtils;
 import org.eclipse.jetty.util.StringUtil;
 import org.slf4j.Logger;
@@ -857,13 +861,137 @@ public class OmMetadataManagerImpl implements OMMetadataManager {
     return result;
   }
 
-  // TODO: HDDS-2419 - Complete stub below for core logic
   @Override
   public List<RepeatedOmKeyInfo> listTrash(String volumeName, String bucketName,
       String startKeyName, String keyPrefix, int maxKeys) throws IOException {
 
-    List<RepeatedOmKeyInfo> deletedKeys = new ArrayList<>();
-    return deletedKeys;
+    List<RepeatedOmKeyInfo> result = new ArrayList<>();
+
+    if (maxKeys <= 0) {
+      return result;
+    }
+
+    String volumeKey = getVolumeKey(volumeName);
+    if (getVolumeTable().get(volumeKey) == null) {
+      throw new OMException("Volume " + volumeName + " not found.",
+        ResultCodes.VOLUME_NOT_FOUND);
+    }
+
+    String bucketKey = getBucketKey(volumeName, bucketName);
+    if (getBucketTable().get(bucketKey) == null) {
+      throw new OMException("Bucket " + bucketName + " not found.",
+        ResultCodes.BUCKET_NOT_FOUND);
+    }
+
+    // Make sure the bucket is trash enabled
+    String trashEnabled = getBucketTable()
+      .get(bucketKey)
+      .getMetadata()
+      .get(OzoneConsts.TRASH_FLAG);
+    if (!Boolean.parseBoolean(trashEnabled)) {
+      throw new OMException("Bucket " + bucketName + " is not trash enabled.",
+        ResultCodes.BUCKET_NOT_TRASH_ENABLED);
+    }
+
+    String seekKey;
+    boolean skipStartKey = false;
+    if (StringUtil.isNotBlank(startKeyName)) {
+      // Seek to the specified key.
+      seekKey = getOzoneKey(volumeName, bucketName, startKeyName);
+      skipStartKey = true;
+    } else {
+      // This allows us to seek directly to the first key
+      // with the right prefix.
+      seekKey = getOzoneKey(volumeName, bucketName, keyPrefix);
+    }
+
+    String seekPrefix;
+    if (StringUtil.isNotBlank(keyPrefix)) {
+      seekPrefix = getOzoneKey(volumeName, bucketName, keyPrefix);
+    } else {
+      seekPrefix = getBucketKey(volumeName, bucketName + OM_KEY_PREFIX);
+    }
+
+    Iterator<Map.Entry<CacheKey<String>, CacheValue<RepeatedOmKeyInfo>>>
+      cacheIterator = deletedTable.cacheIterator();
+
+    TreeMap<String, RepeatedOmKeyInfo> cacheDeletedKeyMap = new TreeMap<>();
+
+    // Check the cache for deleted keys
+    while (cacheIterator.hasNext()) {
+      Map.Entry<CacheKey<String>, CacheValue<RepeatedOmKeyInfo>> entry =
+        cacheIterator.next();
+
+      String key = entry.getKey().getCacheKey();
+      RepeatedOmKeyInfo repeatedKeyInfo = entry.getValue().getCacheValue();
+
+      if (repeatedKeyInfo != null) {
+        if (key.startsWith(seekPrefix) && key.compareTo(seekKey) >= 0) {
+          cacheDeletedKeyMap.put(key, repeatedKeyInfo);
+        }
+      }
+    }
+
+    // Get up to the maxKeys from the deletedTable
+    int currentCount = 0;
+    try (TableIterator<String, ? extends KeyValue<String,
+      RepeatedOmKeyInfo>> tableIterator = getDeletedTable().iterator()) {
+
+      KeyValue<String, RepeatedOmKeyInfo> keyValue;
+      tableIterator.seek(seekKey);
+      // we need to iterate maxKeys + 1 here because if skipStartKey is
+      // true, we should skip that entry and return the result.
+      while (currentCount < maxKeys + 1 && tableIterator.hasNext()) {
+        keyValue = tableIterator.next();
+        if (keyValue != null && keyValue.getKey().startsWith(seekPrefix)) {
+          cacheDeletedKeyMap.put(keyValue.getKey(), keyValue.getValue());
+          currentCount++;
+        } else {
+          // The SeekPrefix does not match any more
+          break;
+        }
+      }
+    }
+
+    // Merge the cache and database keys, returning
+    // up to the maxKeys as a result
+    currentCount = 0;
+    for (Map.Entry<String, RepeatedOmKeyInfo> cacheKey :
+      cacheDeletedKeyMap.entrySet()) {
+
+      // Skip the start key
+      if (cacheKey.getKey().equals(seekKey) && skipStartKey) {
+        continue;
+      }
+
+      // Check key modification time against trash recovery interval
+      RepeatedOmKeyInfo repeatedKeyInfo = cacheKey.getValue();
+      List<OmKeyInfo> infoList = repeatedKeyInfo.getOmKeyInfoList();
+      long keyModificationTime = 0;
+      for (OmKeyInfo keyInfo : infoList) {
+        keyModificationTime = keyInfo.getModificationTime();
+      }
+
+      // Get the global trash recovery interval in milliseconds
+      OzoneConfiguration configuration = new OzoneConfiguration();
+      long trashRecoveryInterval = (configuration.getInt(
+        OZONE_CLIENT_TRASH_RECOVERY_INTERVAL,
+        OZONE_CLIENT_TRASH_RECOVERY_INTERVAL_DEFAULT) * 60 * 1000);
+
+      // Add the key to the results if it is within the trash recovery window
+      if (keyModificationTime > (Time.now() - trashRecoveryInterval)) {
+        result.add(cacheKey.getValue());
+        currentCount++;
+      }
+
+      if (currentCount == maxKeys) {
+        break;
+      }
+    }
+
+    cacheDeletedKeyMap.clear();
+
+    return result;
   }
 
   @Override
